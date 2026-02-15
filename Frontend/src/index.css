@@ -1,0 +1,253 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* FRA Atlas Design System - Professional Government/GIS Platform
+All colors MUST be HSL. Forest/nature inspired with government professionalism.
+*/
+
+@layer base {
+  :root {
+    /* Core Backgrounds */
+    --background: 0 0% 100%;
+    --foreground: 210 24% 16%;
+
+    /* Card System */
+    --card: 0 0% 100%;
+    --card-foreground: 210 24% 16%;
+
+    /* Interactive Elements */
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 24% 16%;
+
+    /* Primary - Forest Green for FRA/Government */
+    --primary: 158 64% 22%;
+    --primary-foreground: 0 0% 98%;
+    --primary-hover: 158 64% 18%;
+
+    /* Secondary - Earth Tone */
+    --secondary: 35 25% 92%;
+    --secondary-foreground: 210 24% 16%;
+
+    /* Muted Tones */
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    /* Accent - Tribal Blue */
+    --accent: 210 100% 45%;
+    --accent-foreground: 0 0% 98%;
+    --accent-hover: 210 100% 40%;
+
+    /* Status Colors */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 98%;
+    --warning: 45 93% 47%;
+    --warning-foreground: 210 24% 16%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* UI Elements */
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 158 64% 22%;
+
+    /* Custom Design Tokens */
+    --forest-green: 158 64% 22%;
+    --forest-light: 158 40% 85%;
+    --tribal-blue: 210 100% 45%;
+    --earth-brown: 35 65% 28%;
+    --nature-gold: 45 93% 47%;
+    
+    /* Gradients */
+    --gradient-hero: linear-gradient(135deg, hsl(158 64% 22%), hsl(210 100% 45%));
+    --gradient-card: linear-gradient(135deg, hsl(0 0% 100%), hsl(210 40% 98%));
+    --gradient-accent: linear-gradient(135deg, hsl(210 100% 45%), hsl(158 64% 22%));
+    
+    /* Status Gradients */
+    --gradient-success: linear-gradient(135deg, hsl(142 76% 36%), hsl(142 76% 40%));
+    --gradient-warning: linear-gradient(135deg, hsl(45 93% 47%), hsl(45 93% 50%));
+    
+    /* Shadows */
+    --shadow-card: 0 4px 6px -1px hsl(210 24% 16% / 0.1), 0 2px 4px -1px hsl(210 24% 16% / 0.06);
+    --shadow-elevated: 0 10px 15px -3px hsl(210 24% 16% / 0.1), 0 4px 6px -2px hsl(210 24% 16% / 0.05);
+    --shadow-interactive: 0 8px 25px hsl(158 64% 22% / 0.15);
+
+    /* Spacing & Layout */
+    --header-height: 4rem;
+    --sidebar-width: 16rem;
+    --sidebar-collapsed: 4rem;
+
+    --radius: 0.5rem;
+
+    /* Sidebar Variables */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 210 24% 16%;
+    --foreground: 0 0% 95%;
+
+    --card: 210 24% 16%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 210 24% 16%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 158 64% 35%;
+    --primary-foreground: 0 0% 98%;
+    --primary-hover: 158 64% 30%;
+
+    --secondary: 217 32% 17%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 217 32% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 210 100% 50%;
+    --accent-foreground: 0 0% 98%;
+    --accent-hover: 210 100% 45%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 98%;
+    --warning: 45 93% 47%;
+    --warning-foreground: 210 24% 16%;
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 217 32% 17%;
+    --input: 217 32% 17%;
+    --ring: 158 64% 35%;
+
+    /* Dark mode custom tokens */
+    --forest-green: 158 64% 35%;
+    --forest-light: 158 40% 25%;
+    --tribal-blue: 210 100% 50%;
+    --earth-brown: 35 65% 35%;
+    --nature-gold: 45 93% 55%;
+
+    /* Dark gradients */
+    --gradient-hero: linear-gradient(135deg, hsl(158 64% 35%), hsl(210 100% 50%));
+    --gradient-card: linear-gradient(135deg, hsl(210 24% 16%), hsl(217 32% 19%));
+
+    /* Dark sidebar */
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-muted;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted-foreground/50 rounded-full;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/70;
+  }
+}
+
+@layer components {
+  /* FRA Atlas Component Utilities */
+  .fra-container {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .fra-card {
+    @apply bg-card border shadow-card rounded-lg p-6;
+  }
+
+  .fra-card-elevated {
+    @apply bg-card border shadow-elevated rounded-lg p-6 hover:shadow-interactive transition-all duration-200;
+  }
+
+  .fra-gradient-text {
+    @apply bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent;
+  }
+
+  .fra-section {
+    @apply py-16 lg:py-24;
+  }
+
+  /* Interactive Elements */
+  .hover-lift {
+    @apply transition-all duration-200 hover:-translate-y-1 hover:shadow-elevated;
+  }
+
+  .pulse-border {
+    @apply relative;
+  }
+
+  .pulse-border::before {
+    @apply content-[''] absolute inset-0 rounded-lg bg-gradient-accent p-[1px] animate-pulse-glow;
+  }
+
+  /* Map specific styles */
+  .leaflet-container {
+    @apply font-sans;
+  }
+  
+  .leaflet-popup-content-wrapper {
+    @apply bg-card border shadow-elevated rounded-lg text-card-foreground;
+  }
+  
+  .leaflet-popup-close-button {
+    @apply text-muted-foreground hover:text-foreground;
+  }
+
+  .custom-marker {
+    @apply border-0;
+  }
+
+  .fra-popup .leaflet-popup-content {
+    @apply m-0;
+  }
+
+  /* Custom loading animation */
+  .fra-spinner {
+    @apply animate-spin rounded-full h-6 w-6 border-b-2 border-primary;
+  }
+
+  /* Status badges */
+  .status-verified {
+    @apply bg-gradient-success text-success-foreground px-2 py-1 rounded-md text-xs font-medium;
+  }
+  
+  .status-pending {
+    @apply bg-gradient-warning text-warning-foreground px-2 py-1 rounded-md text-xs font-medium;
+  }
+  
+  .status-rejected {
+    @apply bg-destructive text-destructive-foreground px-2 py-1 rounded-md text-xs font-medium;
+  }
+}

@@ -1,0 +1,85 @@
+# =========================
+# Python cache & build
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# =========================
+# Virtual environment
+# =========================
+venv/
+ENV/
+env/
+.venv/
+
+# =========================
+# Node.js / React
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.pnpm-debug.log*
+.next/
+out/
+.cache/
+coverage/
+
+# =========================
+# IDE/editor configs
+# =========================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Testing
+# =========================
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+jest-test-results.json
+test-report.xml
+
+# =========================
+# Environment & secrets
+# =========================
+.env
+*.env
+
+# =========================
+# Uvicorn / FastAPI reload artifacts
+# =========================
+*.pid
+*.db-journal
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Reports
+# =========================
+coverage.xml
