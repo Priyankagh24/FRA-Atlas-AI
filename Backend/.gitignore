@@ -1,0 +1,51 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE/editor configs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Byte-compiled
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Testing
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+
+# Environment & secrets
+.env
+*.env
+
+# Uvicorn / FastAPI reload artifacts
+*.pid
+*.db-journal
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Reports
+coverage.xml

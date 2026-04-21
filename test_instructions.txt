@@ -1,0 +1,23 @@
+Instructions to Create Test Samples:
+
+1. **Failing PDF Sample**:
+   - Copy the content from sample_fail_pdf.txt
+   - Paste into a word processor (e.g., Microsoft Word)
+   - Save as PDF: sample_fail.pdf
+   - Upload this PDF - it will be rejected because no satellite image verification.
+
+2. **Passing Image Sample**:
+   - Take the image: dataset/Residential/Residential_1.jpg
+   - Use an image editor to overlay the text from sample_pass_forest.txt on the image (use small, transparent text in a corner to avoid corrupting the image for ML prediction)
+   - Save as: sample_pass_residential.jpg
+   - Upload this image - it should be accepted because ML predicts "Residential" and claimed is "Residential".
+
+3. **Failing Image Sample (Mismatch)**:
+   - Take the same Residential image: dataset/Residential/Residential_1.jpg
+   - Overlay the text from sample_fail_mismatch.txt (claiming "Forest")
+   - Save as: sample_fail_mismatch.jpg
+   - Upload this image - it will be rejected because ML predicts "Residential" but claimed is "Forest".
+
+Note: When overlaying text, place it in a small area or use low opacity to prevent the ML model from misclassifying the image. If the model still predicts wrong, try using different images from the dataset folders.
+
+After uploading, check the response for validation_status ("Matched" for pass, others for fail) and verify in the database (/upload/all endpoint) which ones were stored.

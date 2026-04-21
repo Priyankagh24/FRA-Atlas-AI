@@ -1,0 +1,14 @@
+Patta-Holder Name: Rajesh Kumar
+Father/Husband Name: Suresh Kumar
+Age: 45
+Gender: Male
+Address: Village Road, Block A
+Village Name: Test Village
+Block: Central Block
+District: agartala
+State: tripura
+Total Area Claimed: 2.5 acres
+Land Use: Residential
+Claim ID: FRA-SUCCESS-001
+Type of Claim: Individual
+Date of Application: 2024-04-15

@@ -1,0 +1,9 @@
+venv/
+venv310/
+node_modules/
+dataset/
+ml_training/
+*.zip
+.env
+__pycache__/
+*.pyc
