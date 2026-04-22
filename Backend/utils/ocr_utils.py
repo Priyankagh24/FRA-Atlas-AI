@@ -9,8 +9,9 @@ except ImportError:
     fitz = None  # type: ignore
     PDF_SUPPORT = False
 
-# ✅ Explicitly tell pytesseract where Tesseract is installed (Windows fix)
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+import os
+if os.name == "nt":  # Only on Windows
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
