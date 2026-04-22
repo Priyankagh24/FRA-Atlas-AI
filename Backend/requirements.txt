@@ -74,7 +74,7 @@ mdurl==0.1.2
 multidict==6.7.0
 mypy_extensions==1.1.0
 namex==0.1.0
-numpy==2.1.0
+numpy==1.26.4
 
 optree==0.18.0
 orjson==3.10.0
