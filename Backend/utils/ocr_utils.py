@@ -10,7 +10,7 @@ except ImportError:
     TESSERACT_AVAILABLE = False
 
 try:
-    import fitz  # PyMuPDF
+    import fitz
     PDF_SUPPORT = True
 except ImportError:
     fitz = None
@@ -37,4 +37,23 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
             image = Image.open(io.BytesIO(image_bytes))
             page_texts.append(pytesseract.image_to_string(image, lang="eng"))
         return "\n".join(page_texts).strip()
-    except Ex
+    except Exception as e:
+        raise RuntimeError(f"PDF OCR extraction failed: {e}")
+
+
+def extract_text_from_file(file_bytes: bytes) -> str:
+    if not file_bytes:
+        raise RuntimeError("No file content provided for OCR")
+    if not TESSERACT_AVAILABLE:
+        return "OCR not available on this server"
+    head = file_bytes[:20]
+    if head.startswith(b"%PDF") or b"/Type /Page" in head:
+        return extract_text_from_pdf(file_bytes)
+    try:
+        image = Image.open(io.BytesIO(file_bytes))
+        text = pytesseract.image_to_string(image, lang="eng")
+        return text.strip()
+    except Exception as e:
+        if PDF_SUPPORT and head.startswith(b"%PDF"):
+            return extract_text_from_pdf(file_bytes)
+        raise RuntimeError(f"OCR extraction failed: {str(e)}")
