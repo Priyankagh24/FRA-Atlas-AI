@@ -1,13 +1,19 @@
 from fastapi import FastAPI, HTTPException, APIRouter, UploadFile, File
 from pydantic import BaseModel
-import ee
+try:
+    import ee
+except ImportError:
+    ee = None
 import requests
 from PIL import Image
 import numpy as np
 import io
 import os
 import math
-import tensorflow as tf
+try:
+    import tensorflow as tf
+except ImportError:
+    tf = None
 from shapely.geometry import Polygon, Point
 from typing import Optional
 
@@ -25,11 +31,11 @@ THUMB_DIM = 512                       # thumbnail pixel dimension
 os.makedirs(SAVED_IMAGES_DIR, exist_ok=True)
 
 # Initialize Earth Engine (assumes ee.Authenticate() was already run interactively)
-try:
-    ee.Initialize()
-except Exception as e:
-    # If EE not initialized, the endpoint will fail later with an explicit message
-    print("Warning: Earth Engine not initialized. Ensure ee.Authenticate() was run earlier.", e)
+if ee is not None:
+    try:
+        ee.Initialize()
+    except Exception as e:
+        print("Warning: Earth Engine not initialized.", e)
 
 # Load TensorFlow model
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
