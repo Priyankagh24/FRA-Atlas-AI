@@ -56,7 +56,7 @@ keras==3.12.0
 langchain==0.0.350
 
 langchain-community==0.0.38
-langchain-core==0.1.23
+langchain-core==0.1.52
 langchain-text-splitters==0.0.2
 langgraph==1.0.4
 langgraph-checkpoint==3.0.1
