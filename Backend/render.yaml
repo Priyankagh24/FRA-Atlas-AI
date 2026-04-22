@@ -2,8 +2,11 @@ services:
   - type: web
     name: fra-backend
     env: python
+    pythonVersion: "3.11.9"
     buildCommand: apt-get install -y tesseract-ocr && pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
     envVars:
       - key: DATABASE_URL
+        sync: false
+      - key: HF_SPACE_URL
         sync: false
