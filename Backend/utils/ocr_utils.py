@@ -10,7 +10,7 @@ except ImportError:
     PDF_SUPPORT = False
 
 import os
-if os.name == "nt":  # Only on Windows
+if os.name == "nt":  # Windows only
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 

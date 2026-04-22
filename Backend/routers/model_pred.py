@@ -34,16 +34,7 @@ except Exception as e:
 # Load TensorFlow model
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "..", "best_model.h5")
-model = None
-
-if not os.path.exists(MODEL_PATH):
-    print(f"⚠️ Warning: Model file {MODEL_PATH} not found. Place your Keras model there.")
-else:
-    try:
-        model = tf.keras.models.load_model(MODEL_PATH)
-        print(f"✅ Model loaded from {MODEL_PATH}")
-    except Exception as ex:
-        print(f"⚠️ Warning: could not load model: {ex}")
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "")  # set this in Render env vars later
 
 # Example mapping: change according to your model's classes
 CLASS_NAMES = [
@@ -170,14 +161,17 @@ def preprocess_for_model(pil_img, size=IMG_SIZE):
     # ensure shape (1, H, W, C)
     return np.expand_dims(arr, axis=0)
 
-def predict_with_model(img_array):
-    if model is None:
-        raise RuntimeError("Model not loaded on server. Place your Keras model at MODEL_PATH.")
-    preds = model.predict(img_array)
-    prob = float(np.max(preds))
-    cls_idx = int(np.argmax(preds))
-    cls_name = CLASS_NAMES[cls_idx] if cls_idx < len(CLASS_NAMES) else str(cls_idx)
-    return {"class": cls_name, "class_index": cls_idx, "confidence": prob}
+def predict_with_model(img_bytes: bytes):
+    if not HF_SPACE_URL:
+        raise RuntimeError("HF_SPACE_URL not set in environment variables.")
+    import requests
+    response = requests.post(
+        f"{HF_SPACE_URL}/predict",
+        files={"file": ("image.png", img_bytes, "image/png")},
+        timeout=30
+    )
+    response.raise_for_status()
+    return response.json()
 
 # ---------------- API ENDPOINT ----------------
 @router.post("/predict")
