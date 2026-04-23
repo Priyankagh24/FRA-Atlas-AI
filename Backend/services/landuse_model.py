@@ -26,7 +26,10 @@ KEY FIX (2026-04):
 import io
 import os
 import logging
-import tensorflow as tf
+try:
+    import tensorflow as tf
+except ImportError:
+    tf = None
 
 import numpy as np
 from PIL import Image
@@ -60,7 +63,8 @@ def _load_model():
     global _model
     if _model is None:
         try:
-            import tensorflow as tf  # noqa: import inside function keeps startup fast
+            if tf is None:
+                raise RuntimeError("TensorFlow not available - predictions handled by Hugging Face")
             _model = tf.keras.models.load_model(MODEL_PATH)
             logger.info(f"Land-use model loaded from {MODEL_PATH}")
         except Exception as exc:
