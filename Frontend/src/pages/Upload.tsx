@@ -3,20 +3,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
-
-import { 
-  Upload as UploadIcon, 
-  FileText, 
-  Check, 
-  X, 
+import {
+  Upload as UploadIcon,
+  FileText,
+  X,
   Eye,
   Scan,
   FileCheck,
+  Image as ImageIcon,
+  AlertTriangle,
+  Loader2,
+  CheckCircle2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-// Use .env backend URL
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
 
 interface ExtractedData {
@@ -42,27 +44,23 @@ interface ExtractedData {
   confidence?: number;
   eligible_scheme?: string;
   validation_status?: string;
+  ml_prediction?: string;
+  ml_confidence?: number;
 }
 
-
-
-interface UploadedFile {
-  id: string;
-  name: string;
-  size: number;
-  type: string;
-  status: 'uploading' | 'processing' | 'completed' | 'error';
-  progress: number;
-  extractedData?: ExtractedData;
-  fileObj: File;
+interface UploadResult {
+  extractedData: ExtractedData;
+  docFileName: string;
+  photoFileName: string;
+  photoPreview: string;
 }
+
+type UploadStatus = 'idle' | 'uploading' | 'processing' | 'completed' | 'error';
 
 const normalizeKeys = (rawData?: Record<string, unknown>): ExtractedData => {
   if (!rawData) return {} as ExtractedData;
-
   const map: Record<string, string> = {
     "Type of Claim": "claim_type",
-    "Verification Status": "verification_status",
     "Extraction Confidence": "confidence",
     "Processed Timestamp": "processed_timestamp",
     "Patta-Holder Name": "patta_holder_name",
@@ -83,416 +81,453 @@ const normalizeKeys = (rawData?: Record<string, unknown>): ExtractedData => {
     "Forest cover": "forest_cover",
     "Homestead": "homestead",
   };
-
   const result: Record<string, unknown> = {};
-  Object.entries(map).forEach(([backendKey, frontendKey]) => {
-    if (backendKey in rawData) {
-      const key = frontendKey as keyof ExtractedData;
-      if (frontendKey === "age") {
-        result[key as string] = Number(
-          rawData[backendKey] as string | number | undefined || 0
-        );
-      } else {
-        result[key as string] = (rawData[backendKey] as string) || "";
-      }
+  Object.entries(map).forEach(([bk, fk]) => {
+    if (bk in rawData) {
+      result[fk] = fk === "age" ? Number(rawData[bk] || 0) : (rawData[bk] as string) || "";
     }
   });
-
   return result as unknown as ExtractedData;
 };
 
-const Upload = () => {
-  const [files, setFiles] = useState<UploadedFile[]>([]);
+const formatFileSize = (bytes: number) => {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+const getClassDescription = (className: string) => {
+  const d: Record<string, string> = {
+    Forest: "Dense vegetation areas with trees and natural forest cover",
+    AnnualCrop: "Agricultural fields with seasonal crops",
+    PermanentCrop: "Orchards, vineyards, and perennial crop plantations",
+    Pasture: "Grasslands used for livestock grazing",
+    HerbaceousVegetation: "Natural grasslands and herbaceous plants",
+    Residential: "Urban and residential areas with buildings",
+    Industrial: "Industrial zones and manufacturing facilities",
+    Highway: "Roads, highways, and transportation infrastructure",
+    River: "Rivers, streams, and water bodies",
+    SeaLake: "Large water bodies like seas and lakes",
+  };
+  return d[className] || "Land use type identified by AI analysis";
+};
+
+// ── Drop Zone ──────────────────────────────────────────────────────────────
+
+interface DropZoneProps {
+  label: string;
+  accept: string;
+  hint: string;
+  icon: React.ReactNode;
+  file: File | null;
+  preview?: string | null;
+  error?: string;
+  disabled?: boolean;
+  onFile: (file: File) => void;
+  onClear: () => void;
+}
+
+const DropZone: React.FC<DropZoneProps> = ({
+  label, accept, hint, icon, file, preview, error, disabled, onFile, onClear,
+}) => {
   const [dragActive, setDragActive] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    setDragActive(e.type === "dragenter" || e.type === "dragover");
+  };
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragActive(false);
+    const f = e.dataTransfer.files?.[0]; if (f) onFile(f);
+  };
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-semibold text-gray-700">{label}</p>
+      {file ? (
+        <div className="border rounded-lg p-4 bg-green-50 border-green-200">
+          {preview && <img src={preview} alt="Land preview" className="w-full h-36 object-cover rounded mb-3" />}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-green-800 truncate">{file.name}</p>
+                <p className="text-xs text-green-600">{formatFileSize(file.size)}</p>
+              </div>
+            </div>
+            {!disabled && (
+              <Button size="sm" variant="ghost" onClick={onClear}
+                className="shrink-0 text-red-500 hover:text-red-700 hover:bg-red-50">
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div
+          className={`relative border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+            dragActive ? 'border-primary bg-primary/5'
+            : error ? 'border-red-400 bg-red-50'
+            : 'border-border hover:border-primary/50'
+          }`}
+          onDragEnter={handleDrag} onDragLeave={handleDrag}
+          onDragOver={handleDrag} onDrop={handleDrop}
+          onClick={() => !disabled && inputRef.current?.click()}
+        >
+          <input ref={inputRef} type="file" accept={accept} className="hidden"
+            disabled={disabled}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+          <div className="flex flex-col items-center gap-2">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${error ? 'bg-red-100' : 'bg-primary/10'}`}>
+              {icon}
+            </div>
+            <p className="text-sm text-muted-foreground">{hint}</p>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="text-xs text-red-600 flex items-center gap-1">
+          <AlertTriangle className="h-3 w-3" /> {error}
+        </p>
+      )}
+    </div>
+  );
+};
+
+// ── Main Upload Page ───────────────────────────────────────────────────────
+
+const Upload = () => {
   const { toast } = useToast();
-  const previewRef = useRef<HTMLDivElement>(null); // 🔹 For scroll to preview
+  const previewRef = useRef<HTMLDivElement>(null);
 
-  const uploadFile = useCallback(async (file: UploadedFile) => {
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  const [docError, setDocError] = useState('');
+  const [photoError, setPhotoError] = useState('');
+
+  const [status, setStatus] = useState<UploadStatus>('idle');
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState<UploadResult | null>(null);
+  const [submitError, setSubmitError] = useState('');
+
+  const handleDocFile = (file: File) => {
+    const allowed = ['application/pdf', 'image/png', 'image/jpeg'];
+    if (!allowed.includes(file.type)) {
+      setDocError('Only PDF, PNG, or JPEG files are accepted for the document.');
+      return;
+    }
+    setDocError(''); setDocFile(file);
+  };
+
+  const handlePhotoFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setPhotoError('Only image files (JPG, PNG, etc.) are accepted for the land photo.');
+      return;
+    }
+    setPhotoError(''); setPhotoFile(file);
+    const reader = new FileReader();
+    reader.onload = (e) => setPhotoPreview(e.target?.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const clearDoc = () => { setDocFile(null); setDocError(''); };
+  const clearPhoto = () => { setPhotoFile(null); setPhotoPreview(null); setPhotoError(''); };
+
+  const handleSubmit = useCallback(async () => {
+    let valid = true;
+    if (!docFile) { setDocError('Please attach the FRA document (PDF or image).'); valid = false; }
+    if (!photoFile) { setPhotoError('Please attach a photo of your land.'); valid = false; }
+    if (!valid) return;
+
+    setStatus('uploading'); setProgress(20);
+    setSubmitError(''); setResult(null);
+
     try {
-      setFiles(prev =>
-        prev.map(f =>
-          f.id === file.id ? { ...f, status: "processing", progress: 50 } : f
-        )
-      );
-
       const formData = new FormData();
-      formData.append("file", file.fileObj);
+      formData.append('file', docFile!);
+      formData.append('land_photo', photoFile!);
 
-      const res = await fetch(`${BACKEND_URL}/upload/`, {
-        method: "POST",
+      setProgress(40); setStatus('processing');
+
+      const res = await fetch(`${BACKEND_URL}/upload/with-photo`, {
+        method: 'POST',
         body: formData,
       });
 
+      setProgress(80);
       const raw = await res.json();
-      console.log("Upload response:", raw);
 
       if (!res.ok) {
-        throw new Error(raw?.detail || "Upload failed");
+        throw new Error(raw?.detail || 'Upload failed. Please check your files and try again.');
       }
 
       const extracted = raw?.data ?? raw;
-      const normalized = {
+      const normalized: ExtractedData = {
         ...normalizeKeys(extracted),
         claim_id: raw.claim_id,
         eligible_scheme: raw.eligible_scheme,
         validation_status: raw.validation_status,
         processed_timestamp: raw.processed_timestamp,
+        ml_prediction: raw.ml_prediction,
+        ml_confidence: raw.ml_confidence,
       };
 
-      setFiles(prev =>
-        prev.map(f =>
-          f.id === file.id
-            ? {
-                ...f,
-                status: "completed",
-                progress: 100,
-                extractedData: normalized,
-              }
-            : f
-        )
-      );
-
-      toast({
-        title: "Upload successful",
-        description: `${file.name} processed successfully.`,
+      setResult({
+        extractedData: normalized,
+        docFileName: docFile!.name,
+        photoFileName: photoFile!.name,
+        photoPreview: photoPreview || '',
       });
+
+      setStatus('completed'); setProgress(100);
+      toast({ title: 'Upload successful', description: 'Your FRA claim has been processed and stored.' });
+      setTimeout(() => previewRef.current?.scrollIntoView({ behavior: 'smooth' }), 200);
+
     } catch (err: unknown) {
-      console.error(err);
-
-      setFiles(prev =>
-        prev.map(f =>
-          f.id === file.id ? { ...f, status: "error", progress: 100 } : f
-        )
-      );
-
-      toast({
-        title: "Upload failed",
-        description:
-          err instanceof Error ? err.message : "Could not process file",
-        variant: "destructive",
-      });
+      setStatus('error'); setProgress(100);
+      const msg = err instanceof Error ? err.message : 'Could not process submission.';
+      setSubmitError(msg);
+      toast({ title: 'Submission failed', description: msg, variant: 'destructive' });
     }
-  }, [toast]);
+  }, [docFile, photoFile, photoPreview, toast]);
 
-  const handleFiles = useCallback(
-    async (fileList: File[]) => {
-      const newFiles: UploadedFile[] = fileList.map((file, index) => ({
-        id: `${Date.now()}-${index}`,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        status: 'uploading',
-        progress: 0,
-        fileObj: file,
-      }));
-
-      setFiles(prev => [...prev, ...newFiles]);
-
-      for (const file of newFiles) {
-        await uploadFile(file);
-      }
-    },
-    [uploadFile]
-  );
-
-  const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFiles(Array.from(e.dataTransfer.files));
-    }
-  }, [handleFiles]);
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  const handleReset = () => {
+    setDocFile(null); setPhotoFile(null); setPhotoPreview(null);
+    setDocError(''); setPhotoError(''); setSubmitError('');
+    setStatus('idle'); setProgress(0); setResult(null);
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'uploading':
-        return <UploadIcon className="h-4 w-4 animate-pulse" />;
-      case 'processing':
-        return <Scan className="h-4 w-4 animate-spin" />;
-      case 'completed':
-        return <Check className="h-4 w-4 text-green-500" />;
-      case 'error':
-        return <X className="h-4 w-4 text-red-500" />;
-      default:
-        return <FileText className="h-4 w-4" />;
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'uploading':
-        return <Badge variant="secondary">Uploading</Badge>;
-      case 'processing':
-        return <Badge className="status-pending">Processing</Badge>;
-      case 'completed':
-        return <Badge className="status-verified">Completed</Badge>;
-      case 'error':
-        return <Badge variant="destructive">Error</Badge>;
-      default:
-        return <Badge variant="secondary">{status}</Badge>;
-    }
-  };
+  const isSubmitting = status === 'uploading' || status === 'processing';
 
   return (
     <div className="fra-container py-8">
       <div className="max-w-4xl mx-auto">
-        {/* Header */}
+
         <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Document Upload & Digitization</h1>
+          <h1 className="text-3xl font-bold mb-2">Document Upload & Land Classification</h1>
           <p className="text-muted-foreground">
-            Upload scanned FRA documents for automated OCR extraction and metadata processing
+            Submit your FRA claim document along with a photo of your land. The AI will classify
+            the land type from the photo and cross-verify it against your document details.
           </p>
         </div>
 
-        {/* Upload Area */}
+        {/* ── Form Card ── */}
         <Card className="mb-8">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <UploadIcon className="h-5 w-5" />
-              Upload FRA Documents
+              Submit FRA Claim
             </CardTitle>
             <CardDescription>
-              Drag and drop files or click to select. Supports PDF, JPG, PNG formats.
+              Both fields are required. Upload your claim document AND a photo of the land.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div
-              className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-                dragActive 
-                  ? 'border-primary bg-primary/5' 
-                  : 'border-border hover:border-primary/50'
-              }`}
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-            >
-              <input
-                type="file"
-                multiple
+          <CardContent className="space-y-6">
+
+            <div className="grid md:grid-cols-2 gap-6">
+              <DropZone
+                label="1. FRA Claim Document *"
                 accept=".pdf,.jpg,.jpeg,.png"
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                onChange={(e) => e.target.files && handleFiles(Array.from(e.target.files))}
+                hint="Drop your PDF or scanned form here, or click to browse"
+                icon={<FileText className="h-5 w-5 text-primary" />}
+                file={docFile} error={docError}
+                disabled={isSubmitting || status === 'completed'}
+                onFile={handleDocFile} onClear={clearDoc}
               />
-              
-              <div className="flex flex-col items-center space-y-4">
-                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
-                  <UploadIcon className="h-8 w-8 text-primary" />
+              <DropZone
+                label="2. Photo of Your Land *"
+                accept="image/*"
+                hint="Drop a clear photo of your land, or click to browse"
+                icon={<ImageIcon className="h-5 w-5 text-primary" />}
+                file={photoFile} preview={photoPreview} error={photoError}
+                disabled={isSubmitting || status === 'completed'}
+                onFile={handlePhotoFile} onClear={clearPhoto}
+              />
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+              <p className="font-semibold mb-1">How it works</p>
+              <ul className="list-disc list-inside space-y-1 text-blue-700">
+                <li>The document is scanned with OCR to extract claim details (name, state, district, village, claim ID…).</li>
+                <li>The land photo is analysed by the AI model to classify land use (Forest, Crop, Pasture…).</li>
+                <li>The AI classification is cross-verified against the land use declared in your document.</li>
+                <li>Only complete, valid, and non-duplicate records are stored in the database.</li>
+              </ul>
+            </div>
+
+            {isSubmitting && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {status === 'uploading' ? 'Uploading files…' : 'Processing document and classifying land photo…'}
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold">Drop files here</h3>
-                  <p className="text-muted-foreground">or click to browse from your device</p>
-                </div>
+                <Progress value={progress} className="h-2" />
               </div>
+            )}
+
+            {submitError && status === 'error' && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{submitError}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="flex gap-3">
+              {status !== 'completed' && (
+                <Button onClick={handleSubmit} disabled={isSubmitting} className="flex-1">
+                  {isSubmitting
+                    ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing…</>
+                    : <><Scan className="mr-2 h-4 w-4" /> Submit Claim</>
+                  }
+                </Button>
+              )}
+              {(status === 'completed' || status === 'error') && (
+                <Button variant="outline" onClick={handleReset} className="flex-1">
+                  Submit Another Claim
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
 
-        {/* Processing Queue */}
-        {files.length > 0 && (
-          <Card className="mb-8">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileCheck className="h-5 w-5" />
-                Processing Queue
-              </CardTitle>
-              <CardDescription>
-                Track the status of your uploaded documents
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {files.map((file) => (
-                  <div key={file.id} className="flex items-center space-x-4 p-4 border rounded-lg">
-                    <div className="flex items-center space-x-3 flex-1">
-                      {getStatusIcon(file.status)}
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">{file.name}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {formatFileSize(file.size)} • {file.type}
-                        </p>
-                      </div>
+        {/* ── Results ── */}
+        {result && (
+          <div ref={previewRef} className="space-y-6">
+
+            {/* Land Classification Result */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ImageIcon className="h-5 w-5" />
+                  Land Classification Result
+                </CardTitle>
+                <CardDescription>AI analysis of your land photo</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-2 gap-6">
+                  {result.photoPreview && (
+                    <div className="border rounded-lg overflow-hidden">
+                      <img src={result.photoPreview} alt="Uploaded land" className="w-full h-52 object-cover" />
+                      <p className="text-xs text-muted-foreground p-2 text-center">{result.photoFileName}</p>
                     </div>
-                    
-                    <div className="flex items-center space-x-4">
-                      {(file.status === 'uploading' || file.status === 'processing') && (
-                        <div className="w-24">
-                          <Progress value={file.progress} className="h-2" />
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {file.progress}%
-                          </p>
-                        </div>
+                  )}
+                  <div className="space-y-4">
+                    <div className="text-center p-4 bg-gray-50 rounded-lg">
+                      <p className="text-sm text-muted-foreground mb-1">Predicted Land Use</p>
+                      <p className="text-2xl font-bold text-primary">
+                        {result.extractedData.ml_prediction || 'N/A'}
+                      </p>
+                      {result.extractedData.ml_confidence != null && result.extractedData.ml_confidence > 0 && (
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Confidence: {(result.extractedData.ml_confidence * 100).toFixed(1)}%
+                        </p>
                       )}
-                      
-                      {getStatusBadge(file.status)}
-                      
-                      {file.status === 'completed' && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => {
-                            toast({
-                              title: "OCR Data Ready",
-                              description: `Showing extracted details for ${file.name}`,
-                            });
-                            // 🔹 Scroll to preview section
-                            previewRef.current?.scrollIntoView({ behavior: "smooth" });
-                          }}
-                        >
-                          <Eye className="h-4 w-4 mr-2" />
-                          View
-                        </Button>
-                      )}
+                    </div>
+                    {result.extractedData.ml_prediction && result.extractedData.ml_prediction !== 'Not Applicable' && (
+                      <div className="bg-gray-50 p-3 rounded-lg text-sm text-gray-700">
+                        {getClassDescription(result.extractedData.ml_prediction)}
+                      </div>
+                    )}
+                    <div className={`p-3 rounded-lg text-sm ${
+                      result.extractedData.validation_status === 'Matched'
+                        ? 'bg-green-50 text-green-800 border border-green-200'
+                        : result.extractedData.validation_status === 'Mismatch'
+                        ? 'bg-red-50 text-red-800 border border-red-200'
+                        : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
+                    }`}>
+                      <p className="font-semibold">Validation: {result.extractedData.validation_status || 'Pending'}</p>
+                      <p className="mt-1 text-xs">
+                        {result.extractedData.validation_status === 'Matched'
+                          ? 'The AI classification matches the land use declared in your document.'
+                          : result.extractedData.validation_status === 'Mismatch'
+                          ? 'A discrepancy was detected. Your claim is flagged for manual review in the Atlas.'
+                          : 'Land use could not be auto-verified. Your claim is queued for manual officer review.'}
+                      </p>
                     </div>
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+                </div>
+              </CardContent>
+            </Card>
 
-        {/* Extracted Data Preview */}
-        {files.some(f => f.status === 'completed' && f.extractedData) && (
-          <Card ref={previewRef}>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Scan className="h-5 w-5" />
-                Extracted Data Preview
-              </CardTitle>
-              <CardDescription>
-                OCR and NER extracted information from your documents
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-  {files
-    .filter(f => f.status === "completed" && f.extractedData)
-    .map((file) => (
-      <div
-        key={file.id}
-        className="mb-8 rounded-xl border bg-white shadow-sm p-6"
-      >
+            {/* Extracted Document Data */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FileCheck className="h-5 w-5" />
+                  Extracted Document Data
+                </CardTitle>
+                <CardDescription>OCR and NER extracted information from {result.docFileName}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-xl border bg-white shadow-sm p-6">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b pb-4 mb-6">
+                    <div>
+                      <h3 className="text-xl font-semibold">{result.extractedData.patta_holder_name}</h3>
+                      <p className="text-sm text-muted-foreground">Claim ID: {result.extractedData.claim_id}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3 mt-3 md:mt-0">
+                      <Badge className="bg-blue-100 text-blue-700 font-medium px-3 py-1">
+                        🏛 {result.extractedData.eligible_scheme || 'No Eligible Scheme'}
+                      </Badge>
+                      <Badge className={
+                        result.extractedData.validation_status === 'Matched'
+                          ? 'bg-green-100 text-green-700 font-medium px-3 py-1'
+                          : result.extractedData.validation_status === 'Mismatch'
+                          ? 'bg-red-100 text-red-700 font-medium px-3 py-1'
+                          : 'bg-yellow-100 text-yellow-700 font-medium px-3 py-1'
+                      }>
+                        🔎 {result.extractedData.validation_status || 'Not Validated'}
+                      </Badge>
+                    </div>
+                  </div>
 
-        {/* ================= HEADER ================= */}
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b pb-4 mb-6">
-          <div>
-            <h3 className="text-xl font-semibold">
-              {file.extractedData?.patta_holder_name}
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              Claim ID: {file.extractedData?.claim_id}
-            </p>
-          </div>
+                  <Button className="mb-6"
+                    onClick={() => window.open(`${BACKEND_URL}/upload/certificate/${result.extractedData.claim_id}`, '_blank')}>
+                    📄 Download Claim Certificate
+                  </Button>
 
-          <div className="flex flex-wrap gap-3 mt-3 md:mt-0">
-            <Badge className="bg-blue-100 text-blue-700 font-medium px-3 py-1">
-              🏛 {file.extractedData?.eligible_scheme || "No Eligible Scheme"}
-            </Badge>
-
-            <Badge
-              className={
-                file.extractedData?.validation_status === "Matched"
-                  ? "bg-green-100 text-green-700 font-medium px-3 py-1"
-                  : "bg-yellow-100 text-yellow-700 font-medium px-3 py-1"
-              }
-            >
-              🔎 {file.extractedData?.validation_status || "Not Validated"}
-            </Badge>
-          </div>
-        </div>
-
-        <Button
-  className="mt-4"
-  onClick={() => {
-    window.open(
-      `${BACKEND_URL}/upload/certificate/${file.extractedData?.claim_id}`,
-      "_blank"
-    );
-  }}
->
-  📄 Download Claim Certificate
-</Button>
-
-        {/* ================= CONTENT GRID ================= */}
-        <div className="grid md:grid-cols-2 gap-8 text-sm">
-
-          {/* ---- LEFT COLUMN ---- */}
-          <div className="space-y-6">
-
-            {/* Claim Details */}
-            <div>
-              <h4 className="text-sm font-semibold text-gray-600 mb-2">
-                Claim Details
-              </h4>
-              <p><strong>Claim Type:</strong> {file.extractedData?.claim_type}</p>
-              <p><strong>Application Date:</strong> {file.extractedData?.date_of_application}</p>
-              <p><strong>Processed At:</strong> {file.extractedData?.processed_timestamp || "-"}</p>
-              <p>
-                <strong>Extraction Confidence:</strong>{" "}
-                {(file.extractedData?.confidence ?? 0.85) * 100}%
-              </p>
-            </div>
-
-            {/* Personal Information */}
-            <div>
-              <h4 className="text-sm font-semibold text-gray-600 mb-2">
-                Personal Information
-              </h4>
-              <p><strong>Age:</strong> {file.extractedData?.age}</p>
-              <p><strong>Gender:</strong> {file.extractedData?.gender}</p>
-              <p><strong>Father/Husband:</strong> {file.extractedData?.father_or_husband_name}</p>
-            </div>
+                  <div className="grid md:grid-cols-2 gap-8 text-sm">
+                    <div className="space-y-6">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-600 mb-2">Claim Details</h4>
+                        <p><strong>Claim Type:</strong> {result.extractedData.claim_type}</p>
+                        <p><strong>Application Date:</strong> {result.extractedData.date_of_application}</p>
+                        <p><strong>Processed At:</strong> {result.extractedData.processed_timestamp || '—'}</p>
+                        <p><strong>Extraction Confidence:</strong> {((result.extractedData.confidence ?? 0.85) * 100).toFixed(0)}%</p>
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-600 mb-2">Personal Information</h4>
+                        <p><strong>Age:</strong> {result.extractedData.age}</p>
+                        <p><strong>Gender:</strong> {result.extractedData.gender}</p>
+                        <p><strong>Father/Husband:</strong> {result.extractedData.father_or_husband_name}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-6">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-600 mb-2">Location Details</h4>
+                        <p><strong>Village:</strong> {result.extractedData.village_name}</p>
+                        <p><strong>District:</strong> {result.extractedData.district}</p>
+                        <p><strong>State:</strong> {result.extractedData.state}</p>
+                        <p><strong>Coordinates:</strong> {result.extractedData.coordinates}</p>
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-600 mb-2">Land Information</h4>
+                        <p><strong>Total Area:</strong> {result.extractedData.total_area_claimed}</p>
+                        <p><strong>Claimed Land Use:</strong> {result.extractedData.land_use}</p>
+                        <p><strong>AI Classified As:</strong> {result.extractedData.ml_prediction || '—'}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
           </div>
-
-          {/* ---- RIGHT COLUMN ---- */}
-          <div className="space-y-6">
-
-            {/* Location Information */}
-            <div>
-              <h4 className="text-sm font-semibold text-gray-600 mb-2">
-                Location Details
-              </h4>
-              <p><strong>Village:</strong> {file.extractedData?.village_name}</p>
-              <p><strong>District:</strong> {file.extractedData?.district}</p>
-              <p><strong>State:</strong> {file.extractedData?.state}</p>
-              <p><strong>Coordinates:</strong> {file.extractedData?.coordinates}</p>
-            </div>
-
-            {/* Land Information */}
-            <div>
-              <h4 className="text-sm font-semibold text-gray-600 mb-2">
-                Land Information
-              </h4>
-              <p><strong>Total Area:</strong> {file.extractedData?.total_area_claimed}</p>
-              <p><strong>Land Use:</strong> {file.extractedData?.land_use}</p>
-            </div>
-
-          </div>
-        </div>
-      </div>
-  ))}
-</CardContent>
-          </Card>
         )}
       </div>
     </div>

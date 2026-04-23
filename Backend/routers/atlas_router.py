@@ -22,6 +22,37 @@ try:
 except ImportError as e:
     logging.error(f"Failed to import satellite/ML dependencies: {e}")
 
+
+
+from tensorflow.keras.layers import InputLayer, Conv2D, Dense, MaxPooling2D, Flatten
+
+# 1. Trick Keras into ignoring DTypePolicy
+def ignore_dtype_policy(config):
+    if isinstance(config, dict) and 'dtype' in config:
+        if isinstance(config['dtype'], dict) and 'class_name' in config['dtype']:
+            if config['dtype']['class_name'] == 'DTypePolicy':
+                # Revert to a simple string dtype that Keras 2 understands
+                config['dtype'] = config['dtype']['config'].get('name', 'float32')
+    return config
+
+# 2. Expanded Monkey-patch for common Keras 3 -> 2 mismatches
+class CompatibleInputLayer(InputLayer):
+    def __init__(self, *args, **kwargs):
+        if 'batch_shape' in kwargs:
+            kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
+        super().__init__(*args, **kwargs)
+
+class CompatibleConv2D(Conv2D):
+    def __init__(self, *args, **kwargs):
+        kwargs = ignore_dtype_policy(kwargs)
+        super().__init__(*args, **kwargs)
+
+# 3. Apply the patches to the tf.keras namespace
+tf.keras.layers.InputLayer = CompatibleInputLayer
+tf.keras.layers.Conv2D = CompatibleConv2D
+# If you get errors for Dense or MaxPooling, add similar patches for them.
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/atlas", tags=["Atlas"])
 
@@ -32,10 +63,14 @@ MODEL_PATH = os.path.join(BASE_DIR, "..", "best_model.h5")
 
 def _load_model_safe():
     global MODEL
-    if MODEL: return MODEL
+    if MODEL is not None: return MODEL
     try:
         if os.path.exists(MODEL_PATH):
-            MODEL = tf.keras.models.load_model(MODEL_PATH)
+            # Add custom_objects here to be 100% safe
+            MODEL = tf.keras.models.load_model(
+                MODEL_PATH, 
+                custom_objects={'InputLayer': CompatibleInputLayer}
+            )
             logger.info("✅ Atlas AI Model loaded into memory.")
         else:
             logger.warning(f"⚠️ Model file not found at {MODEL_PATH}")
@@ -51,7 +86,7 @@ def _init_gee_safe():
     global GEE_INITIALIZED, GEE_ERROR
     if GEE_INITIALIZED: return True
     try:
-        ee.Initialize(project='eighth-zenith-493606-b1')
+        ee.Initialize(project='fra-satellite')
         GEE_INITIALIZED = True
         logger.info("✅ Google Earth Engine Initialized (Project: eighth-zenith-493606-b1)")
         return True
@@ -137,7 +172,14 @@ def _map_land_use_to_class(lu: str) -> tuple:
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
-
+@router.on_event("startup")
+async def startup_event():
+    logger.info("🚀 Starting Atlas Router Services...")
+    _load_model_safe()
+    _init_gee_safe()
+    
+    
+    
 @router.get("/claims")
 def get_all_claims_for_atlas():
     """Returns all FRA claims with all fields needed for Atlas visualization."""
@@ -221,13 +263,13 @@ def classify_coordinates(req: CoordinateClassifyRequest):
                 {"cid": req.claim_id}
             ).mappings().first()
             if row:
-                claimed_lu          = row.get("land_use") or ""
-                db_ml_label         = row.get("ml_land_use") or ""
-                db_ml_conf          = row.get("ml_confidence")
-                db_state            = row.get("state") or ""
-                db_district         = row.get("district") or ""
-    db_village          = row.get("village_name") or ""
-    db_validation_status = row.get("validation_status") or ""
+                claimed_lu           = row.get("land_use") or ""
+                db_ml_label          = row.get("ml_land_use") or ""
+                db_ml_conf           = row.get("ml_confidence")
+                db_state             = row.get("state") or ""
+                db_district          = row.get("district") or ""
+                db_village           = row.get("village_name") or ""        # ← FIXED: was outside if-block
+                db_validation_status = row.get("validation_status") or ""   # ← FIXED: was outside if-block
     gee_error_detail    = None
 
     # ── Phase 2: Live Sentinel-2 Spatial Consensus AI (Professional) ─────────
@@ -249,7 +291,15 @@ def classify_coordinates(req: CoordinateClassifyRequest):
         ]
         aoi = ee.Geometry.Polygon([aoi_coords])
         
-        coll = (
+        # ── Two-collection strategy ──────────────────────────────────────────
+        # 1. Full-year median  → used for CNN tile classification + thumbnail
+        #    (wide date range = more cloud-free images to pick from)
+        # 2. Monsoon median (Jul–Oct) → used for NDVI/NDWI spectral checks
+        #    Reason: Indian dry-deciduous forest (e.g. Dindori, MP) has
+        #    NDVI ~0.3–0.45 in Feb–May (leaf-off) but 0.55–0.75 in Jul–Sep
+        #    (leaf-on). Using the year-round median suppresses the green signal
+        #    and causes the CNN to mistake forest for PermanentCrop.
+        coll_full = (
             ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
             .filterBounds(aoi)
             .filterDate("2023-01-01", "2024-12-31")
@@ -258,16 +308,33 @@ def classify_coordinates(req: CoordinateClassifyRequest):
             .median()
             .clip(aoi)
         )
-        
+
+        # Monsoon collection for spectral indices (greener = more reliable NDVI)
+        coll_monsoon = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(aoi)
+            .filterDate("2023-07-01", "2023-10-31")
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+            .map(_mask_clouds)
+            .median()
+            .clip(aoi)
+        )
+        # Fall back to full-year collection if monsoon has no images
+        monsoon_size = coll_monsoon.select("B8").reduceRegion(
+            reducer=ee.Reducer.count(), geometry=aoi, scale=10
+        ).get("B8").getInfo()
+        coll_spectral = coll_monsoon if (monsoon_size and int(monsoon_size) > 0) else coll_full
+        coll = coll_full   # CNN classification always uses full-year
+
         # ── Spectral Verification (Multi-Sensor) ─────────────────────────────
-        # NDWI = (Green - NIR) / (Green + NIR) -> Sentinel-2 B3 & B8
-        # High value (> 0.0) indicates deep water.
-        ndwi_img = coll.normalizedDifference(['B3', 'B8'])
+        # NDWI = (Green - NIR) / (Green + NIR)  → water detection
+        # Uses monsoon collection so water bodies are at peak level
+        ndwi_img = coll_spectral.normalizedDifference(["B3", "B8"])
         ndwi_val = ndwi_img.reduceRegion(
             reducer=ee.Reducer.median(),
             geometry=aoi,
             scale=10
-        ).get('nd').getInfo()
+        ).get("nd").getInfo()
         
         # Professional-grade TCI (True Color Image) thumbnail for UI
         vis = {"min": 0, "max": 0.3, "bands": ["B4", "B3", "B2"]}
@@ -299,15 +366,45 @@ def classify_coordinates(req: CoordinateClassifyRequest):
         consensus_pct = win_count / 9.0
         avg_confidence = float(np.mean([np.max(p) for p in preds_batch]))
 
-        # ── Spectral Override ────────────────────────────────────────────────
-        # If NDWI > 0.01, it is a clear spectral signal of water.
-        # Overrule the AI guess if it says PermanentCrop, Forest, or Herbaceous.
+        # ── Spectral Multi-Index Override ────────────────────────────────────
+        # NDWI > 0.01  → clear water signal        → override with River
+        # NDVI > 0.35  → meaningful green canopy   → fix CNN PermanentCrop/AnnualCrop
+        #
+        # NDVI threshold is 0.35 (not 0.55) because:
+        #   • coll_spectral is the monsoon (Jul–Oct) collection where forests are
+        #     at peak greenness. Even sparse dry-deciduous forest hits 0.4–0.6.
+        #   • Agricultural PermanentCrop in India typically has NDVI 0.2–0.4.
+        #   • 0.35 is the sweet spot that separates "definitely forest" from
+        #     "could be crop". Below 0.35 we trust the CNN.
+        ndvi_img = coll_spectral.normalizedDifference(["B8", "B4"])
+        ndvi_val = ndvi_img.reduceRegion(
+            reducer=ee.Reducer.median(),
+            geometry=aoi,
+            scale=10
+        ).get("nd").getInfo()
+
         final_winner = winner
-        
-        if (ndwi_val and ndwi_val > 0.01):
-            if winner in ["PermanentCrop", "Forest", "HerbaceousVegetation", "Pasture"]:
+
+        if ndwi_val and ndwi_val > 0.01:
+            # Spectral water signal overrides CNN land class
+            if winner in ["PermanentCrop", "Forest", "HerbaceousVegetation", "Pasture", "AnnualCrop"]:
                 final_winner = "River"
-                avg_confidence = 0.98 # Signal from NIR sensor is high authority
+                avg_confidence = 0.98
+        elif ndvi_val is not None and ndvi_val > 0.35:
+            # Monsoon-season NDVI > 0.35 = green canopy present = Forest/Vegetation
+            # CNN often says PermanentCrop for dry-season satellite tiles of forest
+            if winner in ["PermanentCrop", "AnnualCrop"]:
+                final_winner = "Forest"
+                avg_confidence = round(min(avg_confidence * 1.05, 0.97), 4)
+                logger.info(
+                    f"NDVI spectral override: CNN said {winner!r} "
+                    f"but monsoon NDVI={ndvi_val:.3f} (>0.35) indicates forest canopy → Forest"
+                )
+        
+        logger.info(
+            f"GEE result: CNN_winner={winner}, NDWI={ndwi_val}, NDVI={ndvi_val}, "
+            f"final={final_winner}, conf={avg_confidence:.3f}"
+        )
 
         return {
             "status": "ok",
@@ -321,7 +418,10 @@ def classify_coordinates(req: CoordinateClassifyRequest):
                 "thumbnail_url": thumb_url,
                 "claimed_land_use": claimed_lu,
                 "ndwi_value": round(float(ndwi_val or 0), 4),
-                "method": "Spatial Consensus + Spectral Multi-Sensor Verification"
+                "ndvi_value": round(float(ndvi_val or 0), 4),
+                "spectral_collection": "monsoon_2023" if (monsoon_size and int(monsoon_size) > 0) else "full_year_2023_2024",
+                "cnn_raw_winner": winner,   # what CNN said before spectral override
+                "method": "Spatial Consensus + Spectral Multi-Sensor Verification (NDWI + NDVI)"
             },
             "geojson": _make_geojson_polygon(req.lat, req.lon, req.total_area_claimed or "1 acres"),
         }
@@ -352,8 +452,12 @@ def classify_coordinates(req: CoordinateClassifyRequest):
         and db_ml_label.lower().strip() not in SKIP_DB_LABELS
         and db_ml_conf is not None
     ):
-        # Normalise the stored CNN class to a display-friendly label
-        display_class, _ = _map_land_use_to_class(db_ml_label)
+        # IMPORTANT: return the raw CNN EuroSAT label directly (e.g. "River", "AnnualCrop").
+        # Do NOT pass through _map_land_use_to_class() here — that function renames
+        # "River" → "Water Body", "AnnualCrop" → "Agriculture", etc., which breaks
+        # the Atlas mismatch detection because the frontend compares this label against
+        # the claimed land use using its own EQUIVALENT_GROUPS logic.
+        # Keeping the raw label also means the UI shows exactly what the CNN predicted.
         location_desc = ", ".join(filter(None, [db_village, db_district, db_state]))
 
         return {
@@ -362,7 +466,7 @@ def classify_coordinates(req: CoordinateClassifyRequest):
             "classification": {
                 "source": "db_ml_prediction",
                 "is_independent_verification": True,
-                "land_use_class": display_class,
+                "land_use_class": db_ml_label,          # ← FIXED: raw CNN label, not normalised
                 "confidence": round(float(db_ml_conf), 4),
                 "claimed_land_use": claimed_lu,
                 "method": (
@@ -578,3 +682,54 @@ def get_claim_shapefile(claim_id: str):
     }
 
     return JSONResponse(content={"type": "FeatureCollection", "features": [feature]})
+
+# ── Update DB with live satellite result ──────────────────────────────────────
+class SatelliteUpdateRequest(BaseModel):
+    claim_id: str
+    satellite_land_use: str
+    satellite_confidence: float
+    validation_status: str   # "Matched" | "Mismatch" | "Verified"
+
+@router.post("/update-satellite-result")
+def update_satellite_result(req: SatelliteUpdateRequest):
+    """
+    After a live GEE satellite classification, call this endpoint to persist
+    the result back into the DB so the Atlas marker colour and Info tab stay
+    in sync with the latest verified satellite data.
+
+    This avoids needing to delete and re-upload a claim just to update the
+    ml_land_use field.
+    """
+    if not req.claim_id:
+        raise HTTPException(400, "claim_id is required")
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("""
+                UPDATE fra_documents
+                SET ml_land_use       = :lu,
+                    ml_confidence     = :conf,
+                    validation_status = :vs
+                WHERE claim_id = :cid
+                RETURNING id, claim_id, validation_status
+            """),
+            {
+                "lu":   req.satellite_land_use,
+                "conf": req.satellite_confidence,
+                "vs":   req.validation_status,
+                "cid":  req.claim_id,
+            }
+        ).mappings().first()
+
+    if not result:
+        raise HTTPException(404, f"Claim '{req.claim_id}' not found")
+
+    logger.info(
+        f"✅ Satellite result written to DB: claim={req.claim_id} "
+        f"ml_land_use={req.satellite_land_use} validation={req.validation_status}"
+    )
+    return {
+        "status": "updated",
+        "claim_id": result["claim_id"],
+        "new_validation_status": result["validation_status"],
+    }

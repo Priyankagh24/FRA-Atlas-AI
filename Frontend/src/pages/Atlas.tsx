@@ -237,7 +237,57 @@ const Atlas = () => {
       const data = await res.json();
 
       if (data.classification && data.classification.land_use_class) {
-        setSatelliteResult(data.classification);
+        const classification = data.classification;
+        setSatelliteResult(classification);
+
+        // ── Persist GEE result back to DB if this was a live satellite scan ──
+        // This keeps the Info tab ML Prediction and marker colour in sync with
+        // the latest verified result. No need to delete & re-upload the claim.
+        if (
+          classification.source === "satellite_ai" &&
+          claim.claim_id &&
+          !claim.claim_id.startsWith("FRA-") === false
+        ) {
+          const claimedLu = (claim.land_use || "").toLowerCase();
+          const detectedLu = (classification.land_use_class || "").toLowerCase();
+          const EQUIV: string[][] = [
+            ["residential", "homestead"],
+            ["forest", "herbaceousvegetation"],
+            ["agriculture", "annualcrop", "permanentcrop"],
+            ["water body", "river", "sealake"],
+          ];
+          const isEquiv = (a: string, b: string) =>
+            a === b || EQUIV.some(g => g.includes(a) && g.includes(b));
+          const newValidation = isEquiv(detectedLu, claimedLu) ? "Matched" : "Mismatch";
+
+          fetch(buildBackendUrl("/atlas/update-satellite-result"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              claim_id: claim.claim_id,
+              satellite_land_use: classification.land_use_class,
+              satellite_confidence: classification.confidence,
+              validation_status: newValidation,
+            }),
+          })
+            .then(r => r.json())
+            .then(upd => {
+              if (upd.status === "updated") {
+                // Update the in-memory claims list so marker colour refreshes
+                setClaims(prev => prev.map(c =>
+                  c.claim_id === claim.claim_id
+                    ? { ...c, ml_land_use: classification.land_use_class, ml_confidence: classification.confidence, validation_status: newValidation }
+                    : c
+                ));
+                setFilteredClaims(prev => prev.map(c =>
+                  c.claim_id === claim.claim_id
+                    ? { ...c, ml_land_use: classification.land_use_class, ml_confidence: classification.confidence, validation_status: newValidation }
+                    : c
+                ));
+              }
+            })
+            .catch(err => console.warn("Could not persist satellite result:", err));
+        }
       } else {
         // Backend returned something but no classification — use claim data directly
         const lu = claim.ml_land_use || claim.land_use || "Unknown";
@@ -1067,4 +1117,5 @@ const Atlas = () => {
 };
 
 export default Atlas;
+
 

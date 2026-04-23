@@ -89,7 +89,7 @@ const LandingPage = () => {
               </div>
             </div>
             
-            <div className="relative hover-lift">
+            <div className="relative hover-lift xl:-mt-20">
               <div className="fra-card-elevated bg-gradient-card">
                 <img 
                   src={dashboardPreview} 

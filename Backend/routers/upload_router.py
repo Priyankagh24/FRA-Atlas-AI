@@ -2,10 +2,10 @@
 upload_router.py  —  FIXED VERSION
 ====================================
 Key fixes in this version:
-  1. HARD BLOCK on land use mismatch — data is NEVER stored in DB if ML
-     detects a land use mismatch (regardless of confidence threshold).
-     Low-confidence ML results are marked "Unverified" and allowed through;
-     genuine mismatches at ANY confidence are rejected before INSERT.
+  1. SOFT FLAG on land use mismatch — when ML detects a mismatch, data IS
+     stored in DB with validation_status="Mismatch" so the Atlas can display
+     and audit flagged claims for manual officer review.
+     Low-confidence ML results are marked "Unverified" and allowed through.
 
   2. OCR Claim ID correction — smart, position-aware fix:
      - '@' → '0'  (most common OCR artifact)
@@ -662,6 +662,310 @@ def _cleanup(file_path):
             os.remove(file_path)
         except Exception:
             pass
+
+
+
+
+# ==========================================================
+# 🔹 UPLOAD DOCUMENT + LAND PHOTO (COMBINED — NEW)
+# ==========================================================
+
+@router.post("/with-photo")
+async def upload_document_with_photo(
+    file: UploadFile = File(..., description="FRA claim document (PDF or image)"),
+    land_photo: UploadFile = File(..., description="Photo of the claimant's land for ML classification"),
+):
+    """
+    Combined upload endpoint that:
+      1. Accepts an FRA document (PDF/image) AND a land photo.
+      2. Runs OCR + NER on the document to extract claim fields.
+      3. Runs the ML land-use classifier on the land PHOTO (not the document).
+      4. Cross-validates ML prediction against the declared land use in the document.
+      5. Validates all required fields, state boundary, claim ID format, and duplicate check.
+      6. Inserts the record into the DB only when all checks pass.
+    """
+    doc_path = photo_path = None
+
+    try:
+        # ── Validate file types ────────────────────────────────────────────
+        allowed_doc = ["image/png", "image/jpeg", "application/pdf"]
+        if file.content_type not in allowed_doc:
+            raise HTTPException(400, "Document must be PDF, PNG, or JPEG.")
+
+        if not land_photo.content_type.startswith("image/"):
+            raise HTTPException(400, "Land photo must be an image file (JPG, PNG, etc.).")
+
+        # ── Read both files ────────────────────────────────────────────────
+        doc_bytes   = await file.read()
+        photo_bytes = await land_photo.read()
+
+        UPLOAD_DIR = "uploaded_docs"
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+        # Save document
+        safe_doc   = os.path.basename(file.filename or "doc")
+        unique_doc = f"{uuid.uuid4().hex}_{safe_doc}"
+        doc_path   = os.path.join(UPLOAD_DIR, unique_doc)
+        with open(doc_path, "wb") as fh:
+            fh.write(doc_bytes)
+
+        # Save land photo
+        safe_photo   = os.path.basename(land_photo.filename or "photo.jpg")
+        unique_photo = f"{uuid.uuid4().hex}_{safe_photo}"
+        photo_path   = os.path.join(UPLOAD_DIR, unique_photo)
+        with open(photo_path, "wb") as fh:
+            fh.write(photo_bytes)
+
+        # ── Step 1: OCR on document ────────────────────────────────────────
+        ocr_text = extract_text_from_file(doc_bytes)
+        logger.info(f"📝 OCR TEXT (first 500): {ocr_text[:500]}")
+
+        # ── Step 2: Regex/LLM extraction ──────────────────────────────────
+        raw_data = clean_with_llm(ocr_text)
+        if not raw_data or not isinstance(raw_data, dict):
+            _cleanup(doc_path); _cleanup(photo_path)
+            raise HTTPException(422, "Document could not be processed. Ensure it contains clear readable text.")
+
+        # ── Step 3: NER pass ───────────────────────────────────────────────
+        ner_entities = extract_entities(ocr_text)
+        ner_fields   = entities_to_document_fields(ner_entities)
+        for ner_key, ner_value in ner_fields.items():
+            if not ner_key.startswith("_") and not raw_data.get(ner_key) and ner_value:
+                raw_data[ner_key] = ner_value
+
+        # ── Step 4: Claim ID OCR correction ───────────────────────────────
+        raw_claim_id = safe_str(raw_data.get("Claim ID"))
+        if raw_claim_id:
+            corrected = correct_claim_id_ocr(raw_claim_id)
+            if corrected != raw_claim_id:
+                logger.info(f"🔧 Claim ID corrected: '{raw_claim_id}' → '{corrected}'")
+            raw_data["Claim ID"] = corrected
+
+        # ── Step 5: Standardize ────────────────────────────────────────────
+        state_value = safe_str(raw_data.get("State")) or extract_state_from_text(ocr_text)
+
+        data = {
+            "Patta-Holder Name":   (safe_str(raw_data.get("Patta-Holder Name"))
+                                    or safe_str(raw_data.get("Claimant Name"))
+                                    or safe_str(raw_data.get("Applicant Name"))),
+            "Father/Husband Name": safe_str(raw_data.get("Father/Husband Name")),
+            "Age":                 raw_data.get("Age"),
+            "Gender":              safe_str(raw_data.get("Gender")),
+            "Address":             safe_str(raw_data.get("Address")),
+            "Village Name":        (safe_str(raw_data.get("Village Name")) or safe_str(raw_data.get("Village"))),
+            "Block":               safe_str(raw_data.get("Block")),
+            "District":            safe_str(raw_data.get("District")),
+            "State":               state_value,
+            "is_supported_state":  raw_data.get("is_supported_state", is_state_allowed(state_value)),
+            "Total Area Claimed":  safe_str(raw_data.get("Total Area Claimed")),
+            "Coordinates":         safe_str(raw_data.get("Coordinates")),
+            "Land Use":            safe_str(raw_data.get("Land Use")),
+            "Claim ID":            safe_str(raw_data.get("Claim ID")),
+            "Type of Claim":       safe_str(raw_data.get("Type of Claim")),
+            "Date of Application": safe_str(raw_data.get("Date of Application")),
+            "Water bodies":        safe_str(raw_data.get("Water bodies")),
+            "Forest cover":        safe_str(raw_data.get("Forest cover")),
+            "Homestead":           safe_str(raw_data.get("Homestead")),
+        }
+
+        # ── Step 6: Validate required fields ──────────────────────────────
+        #  — Must have name, state, district, village
+        #  — State must be within India's permitted FRA boundary
+        is_valid, error_msg = validate_required_fields(data)
+        if not is_valid:
+            _cleanup(doc_path); _cleanup(photo_path)
+            raise HTTPException(422, f"Document validation failed: {error_msg}")
+
+        # Extra: village must not be blank
+        if not safe_str(data.get("Village Name")):
+            _cleanup(doc_path); _cleanup(photo_path)
+            raise HTTPException(422, "Village name is missing from the document. Please ensure the village field is filled.")
+
+        # ── Step 7: Claim ID assignment & duplicate check ──────────────────
+        claim_id = safe_str(data.get("Claim ID"))
+        if not claim_id:
+            claim_id = f"FRA-{uuid.uuid4().hex[:8].upper()}"
+            logger.info(f"🆕 Auto-generated Claim ID: {claim_id}")
+
+        if claim_id_exists(claim_id):
+            _cleanup(doc_path); _cleanup(photo_path)
+            raise HTTPException(
+                409,
+                f"Duplicate record: Claim ID '{claim_id}' already exists in the system. "
+                "Each claim can only be submitted once."
+            )
+
+        # ── Step 8: Scheme determination ──────────────────────────────────
+        eligible_scheme = determine_scheme(data)
+
+        # ── Step 9: Geocoding ──────────────────────────────────────────────
+        full_address = ", ".join(filter(None, [
+            safe_str(data.get("Village Name")),
+            safe_str(data.get("District")),
+            safe_str(data.get("State")),
+            "India"
+        ]))
+        coordinates = safe_str(data.get("Coordinates"))
+        is_valid_coords = "," in coordinates and len(re.findall(r"[-+]?\d*\.\d+|\d+", coordinates)) >= 2
+        if not coordinates or not is_valid_coords:
+            coordinates = get_coordinates_from_address(
+                full_address,
+                village=safe_str(data.get("Village Name")),
+                district=safe_str(data.get("District")),
+                state=safe_str(data.get("State")),
+            )
+
+        # ── Step 10a: Validate claimed land use against FRA types ──────────
+        claimed_land_use_raw = safe_str(data.get("Land Use"))
+        claimed_land_use     = claimed_land_use_raw.lower().strip()
+        is_valid_fra_use     = any(v in claimed_land_use for v in VALID_FRA_LAND_USES)
+        if claimed_land_use and not is_valid_fra_use:
+            _cleanup(doc_path); _cleanup(photo_path)
+            raise HTTPException(
+                422,
+                f"Invalid land use for FRA claim: '{claimed_land_use_raw}'. "
+                "FRA claims are only valid for agricultural, forest, pasture, "
+                "homestead, or community land use types."
+            )
+
+        # ── Step 10b: ML classification on LAND PHOTO ─────────────────────
+        #
+        # The photo uploaded in `land_photo` is a real field/forest photograph,
+        # not a document scan — so we run the satellite CNN on it directly.
+        #
+        try:
+            ml_label, ml_conf = predict_land_use(photo_bytes)
+            logger.info(f"🛰️  ML prediction on land photo: {ml_label} ({ml_conf:.2%})")
+        except Exception as ml_err:
+            logger.warning(f"⚠️  ML model error: {ml_err}")
+            ml_label, ml_conf = "ML Error", 0.0
+
+        # Document-scan guard: if the user accidentally uploaded the document
+        # as the land photo, warn them rather than silently mislabelling.
+        if ml_label == "Document-Scan":
+            _cleanup(doc_path); _cleanup(photo_path)
+            raise HTTPException(
+                422,
+                "The land photo appears to be a scanned document rather than an actual "
+                "photo of the land. Please upload a real photograph of the land parcel."
+            )
+
+        # ── Step 10c: Compare ML prediction vs claimed land use ────────────
+        if ml_label == "ML Error":
+            validation_status = "Unverified"
+        elif land_uses_match(ml_label, claimed_land_use):
+            validation_status = "Matched"
+        else:
+            validation_status = "Mismatch"
+            logger.warning(
+                f"⚠️  Land-use mismatch: claimed='{claimed_land_use_raw}' | ML='{ml_label}'. "
+                "Storing with Mismatch status for Atlas audit."
+            )
+
+        logger.info(
+            f"✅ LAND-USE VALIDATION: {validation_status} "
+            f"| ML={ml_label} ({ml_conf:.2%}) | Claimed='{claimed_land_use_raw}'"
+        )
+
+        # ── Step 11: Insert into DB ────────────────────────────────────────
+        ner_json = _json.dumps(ner_entities) if ner_entities else None
+        params = {
+            "patta_holder_name":      safe_str(data.get("Patta-Holder Name")),
+            "father_or_husband_name": safe_str(data.get("Father/Husband Name")),
+            "age":                    safe_int(data.get("Age")),
+            "gender":                 safe_str(data.get("Gender")),
+            "address":                safe_str(data.get("Address")),
+            "village_name":           safe_str(data.get("Village Name")),
+            "block":                  safe_str(data.get("Block")),
+            "district":               safe_str(data.get("District")),
+            "state":                  safe_str(data.get("State")),
+            "total_area_claimed":     safe_str(data.get("Total Area Claimed")),
+            "coordinates":            coordinates,
+            "land_use":               safe_str(data.get("Land Use")),
+            "claim_id":               claim_id,
+            "claim_type":             safe_str(data.get("Type of Claim")),
+            "date_of_application":    safe_str(data.get("Date of Application")),
+            "water_bodies":           safe_str(data.get("Water bodies")),
+            "forest_cover":           safe_str(data.get("Forest cover")),
+            "homestead":              safe_str(data.get("Homestead")),
+            "ml_land_use":            ml_label,
+            "ml_confidence":          ml_conf,
+            "validation_status":      validation_status,
+            "eligible_scheme":        eligible_scheme,
+            "file_path":              doc_path,
+            "ner_data":               ner_json,
+        }
+
+        try:
+            insert_sql = text("""
+                INSERT INTO fra_documents (
+                    patta_holder_name, father_or_husband_name, age, gender,
+                    address, village_name, block, district, state,
+                    total_area_claimed, coordinates, land_use,
+                    claim_id, claim_type, date_of_application,
+                    water_bodies, forest_cover, homestead,
+                    ml_land_use, ml_confidence, validation_status,
+                    eligible_scheme, file_path, status, ner_data
+                ) VALUES (
+                    :patta_holder_name, :father_or_husband_name, :age, :gender,
+                    :address, :village_name, :block, :district, :state,
+                    :total_area_claimed, :coordinates, :land_use,
+                    :claim_id, :claim_type, :date_of_application,
+                    :water_bodies, :forest_cover, :homestead,
+                    :ml_land_use, :ml_confidence, :validation_status,
+                    :eligible_scheme, :file_path, 'pending', :ner_data
+                )
+                RETURNING id;
+            """)
+            with engine.begin() as conn:
+                doc_id = conn.execute(insert_sql, params).scalar()
+        except Exception:
+            params_no_ner = {k: v for k, v in params.items() if k != "ner_data"}
+            insert_sql_no_ner = text("""
+                INSERT INTO fra_documents (
+                    patta_holder_name, father_or_husband_name, age, gender,
+                    address, village_name, block, district, state,
+                    total_area_claimed, coordinates, land_use,
+                    claim_id, claim_type, date_of_application,
+                    water_bodies, forest_cover, homestead,
+                    ml_land_use, ml_confidence, validation_status,
+                    eligible_scheme, file_path, status
+                ) VALUES (
+                    :patta_holder_name, :father_or_husband_name, :age, :gender,
+                    :address, :village_name, :block, :district, :state,
+                    :total_area_claimed, :coordinates, :land_use,
+                    :claim_id, :claim_type, :date_of_application,
+                    :water_bodies, :forest_cover, :homestead,
+                    :ml_land_use, :ml_confidence, :validation_status,
+                    :eligible_scheme, :file_path, 'pending'
+                )
+                RETURNING id;
+            """)
+            with engine.begin() as conn:
+                doc_id = conn.execute(insert_sql_no_ner, params_no_ner).scalar()
+
+        logger.info(
+            f"✅ SAVED — DB id={doc_id} | Claim={claim_id} | "
+            f"Status={validation_status} | ML={ml_label}"
+        )
+
+        return {
+            "status":             "success",
+            "doc_id":             doc_id,
+            "claim_id":           claim_id,
+            "validation_status":  validation_status,
+            "eligible_scheme":    eligible_scheme,
+            "ml_prediction":      ml_label,
+            "ml_confidence":      ml_conf,
+            "ner_entities_found": len(ner_entities) if ner_entities else 0,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ UPLOAD (with-photo) FAILED: {str(e)}", exc_info=True)
+        _cleanup(doc_path); _cleanup(photo_path)
+        raise HTTPException(500, f"Upload processing failed: {str(e)}")
 
 
 # ==========================================================
